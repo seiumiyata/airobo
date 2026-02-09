@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rust & Circuit - Ver.3.0</title>
+    <title>Rust & Circuit - Ver.3.0 Fix</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -113,6 +113,17 @@
             };
             return <button onClick={onClick} disabled={disabled} className={`${baseStyle} ${variants[variant]} ${className}`}>{children}</button>;
         };
+
+        const Slider = ({ label, value, min, max, onChange, leftLabel, rightLabel }) => (
+            <div className="mb-8">
+                <div className="flex justify-between mb-2 tech-font text-sm">
+                    <span className="text-gray-500">{leftLabel}</span>
+                    <span className="text-cyan-400 glow-text text-lg">{label} [{value}]</span>
+                    <span className="text-gray-500">{rightLabel}</span>
+                </div>
+                <input type="range" min={min} max={max} value={value} onChange={(e) => onChange(Number(e.target.value))} className="w-full h-1 bg-gray-800 appearance-none cursor-pointer accent-cyan-500" />
+            </div>
+        );
 
         // --- Assembly Screen ---
         const AssembleScreen = ({ currentParts, setPart, onBack }) => {
@@ -235,6 +246,22 @@
                 </div>
             );
         };
+
+        // --- Tactics Screen ---
+        const TacticsScreen = ({ aiSettings, setAiSettings, onBack }) => (
+            <div className="flex flex-col h-full p-8 max-w-3xl mx-auto justify-center">
+                <div className="text-center mb-12">
+                    <h2 className="text-4xl tech-font text-cyan-500 glow-text mb-4">AI LOGIC TUNING</h2>
+                    <p className="text-gray-500 text-sm tracking-wider">自律行動ロジック調整</p>
+                </div>
+                <div className="border border-gray-800 p-10 bg-black/40 backdrop-blur space-y-8 relative">
+                    <Slider label="ENGAGEMENT RANGE" value={aiSettings.range} min={0} max={100} onChange={(v) => setAiSettings({...aiSettings, range: v})} leftLabel="CLOSE [近接]" rightLabel="FAR [遠距離]" />
+                    <Slider label="AGGRESSION LEVEL" value={aiSettings.aggression} min={0} max={100} onChange={(v) => setAiSettings({...aiSettings, aggression: v})} leftLabel="DEFENSIVE [慎重]" rightLabel="OFFENSIVE [好戦]" />
+                    <Slider label="EVASION PROTOCOL" value={aiSettings.evasion} min={0} max={100} onChange={(v) => setAiSettings({...aiSettings, evasion: v})} leftLabel="DURABILITY [装甲]" rightLabel="MOBILITY [回避]" />
+                </div>
+                <div className="mt-12 text-center"><Button onClick={onBack} className="w-64">SYSTEM COMMIT</Button></div>
+            </div>
+        );
 
         // --- Battle Screen ---
         const BattleScreen = ({ playerParts, playerAi, enemyData, onFinish }) => {
