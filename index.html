@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rust & Circuit - Ver.3.0</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Zen+Kaku+Gothic+New:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            background-color: #050505;
+            color: #a0a0a0;
+            font-family: 'Zen Kaku Gothic New', sans-serif;
+            overflow: hidden;
+        }
+        .tech-font {
+            font-family: 'Share Tech Mono', monospace;
+        }
+        /* CRT Scanline */
+        .scanline {
+            background: linear-gradient(
+                to bottom,
+                rgba(255,255,255,0),
+                rgba(255,255,255,0) 50%,
+                rgba(0,0,0,0.1) 50%,
+                rgba(0,0,0,0.1)
+            );
+            background-size: 100% 4px;
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            pointer-events: none;
+            z-index: 50;
+        }
+        .glow-text {
+            text-shadow: 0 0 5px currentColor;
+        }
+        /* Custom Scrollbar for Logs */
+        .log-scroll::-webkit-scrollbar { width: 4px; }
+        .log-scroll::-webkit-scrollbar-track { background: #000; }
+        .log-scroll::-webkit-scrollbar-thumb { background: #00ffcc; }
+        
+        /* Flicker Animation */
+        @keyframes flicker {
+            0% { opacity: 0.95; }
+            5% { opacity: 0.85; }
+            10% { opacity: 0.95; }
+            100% { opacity: 0.95; }
+        }
+        .crt-flicker { animation: flicker 0.2s infinite; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo } = React;
+
+        // --- Game Data ---
+        // (Stats tweaked for balance)
+        const PARTS_DB = {
+            head: [
+                { id: 'h_junk', name: 'JUNK-EYE', weight: 10, enCost: 5, scan: 50, desc: 'ジャンク品。索敵距離は短いが軽い。' },
+                { id: 'h_sniper', name: 'EAGLE-X', weight: 15, enCost: 20, scan: 120, desc: '長距離センサー。命中精度補正あり。' },
+                { id: 'h_cqc', name: 'BULL-HORN', weight: 25, enCost: 10, scan: 60, ap: 200, desc: '重装甲バイザー。APが増加する。' },
+            ],
+            core: [
+                { id: 'c_std', name: 'STD-DIESEL', weight: 100, enOutput: 100, ap: 1000, cooling: 50, desc: '標準的なジェネレーター。' },
+                { id: 'c_light', name: 'RACING-V', weight: 60, enOutput: 130, ap: 700, cooling: 40, desc: '高出力だが耐久が低い軽量型。' },
+                { id: 'c_heavy', name: 'FORTRESS-G', weight: 180, enOutput: 90, ap: 1800, cooling: 80, desc: '鈍重だが極めて頑丈な重装甲コア。' },
+            ],
+            arms: [
+                { id: 'a_std', name: 'MANIPULATOR', weight: 50, enCost: 10, aim: 100, melee: 50, desc: '標準アーム。射撃性能は平凡。' },
+                { id: 'a_gunner', name: 'GUNNER-II', weight: 60, enCost: 25, aim: 150, melee: 20, desc: '射撃管制特化。命中率が大幅UP。' },
+                { id: 'a_power', name: 'OGRE-FIST', weight: 90, enCost: 30, aim: 70, melee: 150, desc: '反動制御が高い剛腕。' },
+            ],
+            legs: [
+                { id: 'l_biped', name: 'BIPED-01', type: 'Biped', weight: 100, load: 500, speed: 60, ap: 800, evasion: 10, desc: '二脚。バランスが良い。' },
+                { id: 'l_reverse', name: 'LOCUST-R', type: 'Reverse', weight: 70, load: 350, speed: 90, ap: 500, evasion: 30, desc: '逆関節。回避と速度に優れる。' },
+                { id: 'l_tank', name: 'G-TREAD', type: 'Tank', weight: 250, load: 1000, speed: 30, ap: 2000, evasion: 0, desc: 'タンク。高耐久・高積載だが遅い。' },
+            ],
+            weapon: [
+                { id: 'w_mg', name: 'JUNK M-GUN', weight: 30, range: 150, power: 8, reload: 3, speed: 15, type: 'KINETIC', accuracy: 60, stability: 40, desc: '近距離用マシンガン。バラ撒く。' },
+                { id: 'w_rifle', name: 'ASSAULT RIFLE', weight: 40, range: 350, power: 35, reload: 20, speed: 18, type: 'KINETIC', accuracy: 85, stability: 80, desc: '汎用ライフル。バランスが良い。' },
+                { id: 'w_sniper', name: 'RAIL CANNON', weight: 60, range: 700, power: 90, reload: 70, speed: 45, type: 'KINETIC', accuracy: 95, stability: 95, desc: '超遠距離狙撃砲。' },
+                { id: 'w_laser', name: 'LASER RIFLE', weight: 50, range: 450, power: 65, reload: 40, speed: 30, enUse: 30, type: 'ENERGY', accuracy: 90, stability: 90, desc: 'EN消費型の高精度ライフル。' },
+                { id: 'w_blade', name: 'PLASMA BLADE', weight: 20, range: 60, power: 250, reload: 60, speed: 0, enUse: 20, type: 'MELEE', accuracy: 100, stability: 50, desc: '近接格闘兵器。' },
+            ]
+        };
+
+        const RANKS = [
+            { id: 'F', name: 'F-RANK', prize: 1000, enemyId: 'enemy_f' },
+            { id: 'D', name: 'D-RANK', prize: 3000, enemyId: 'enemy_d' },
+            { id: 'B', name: 'B-RANK', prize: 8000, enemyId: 'enemy_b' },
+            { id: 'S', name: 'S-RANK', prize: 50000, enemyId: 'enemy_s' },
+        ];
+
+        const ENEMIES = {
+            'enemy_f': { name: 'Scrap Walker', color: '#ff6600', parts: { head: PARTS_DB.head[0], core: PARTS_DB.core[0], arms: PARTS_DB.arms[0], legs: PARTS_DB.legs[0], weapon: PARTS_DB.weapon[0] }, ai: { range: 20, aggression: 80, evasion: 10 } },
+            'enemy_d': { name: 'Iron Turtle', color: '#00cc66', parts: { head: PARTS_DB.head[0], core: PARTS_DB.core[2], arms: PARTS_DB.arms[0], legs: PARTS_DB.legs[2], weapon: PARTS_DB.weapon[1] }, ai: { range: 60, aggression: 40, evasion: 0 } },
+            'enemy_b': { name: 'Desert Fox', color: '#cc33cc', parts: { head: PARTS_DB.head[1], core: PARTS_DB.core[1], arms: PARTS_DB.arms[1], legs: PARTS_DB.legs[1], weapon: PARTS_DB.weapon[3] }, ai: { range: 90, aggression: 30, evasion: 90 } },
+            'enemy_s': { name: 'CRIMSON AI', color: '#ff0000', parts: { head: PARTS_DB.head[2], core: PARTS_DB.core[1], arms: PARTS_DB.arms[2], legs: PARTS_DB.legs[1], weapon: PARTS_DB.weapon[2] }, ai: { range: 0, aggression: 100, evasion: 80 } },
+        };
+
+        // --- Common UI Components ---
+        const Button = ({ onClick, children, className = '', disabled = false, variant = 'primary' }) => {
+            const baseStyle = "px-4 py-2 tech-font font-bold transition-all duration-200 border transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed ";
+            const variants = {
+                primary: "bg-cyan-950/30 border-cyan-500 text-cyan-400 hover:bg-cyan-900/50 hover:shadow-[0_0_10px_rgba(34,211,238,0.3)]",
+                secondary: "bg-gray-900/30 border-gray-600 text-gray-400 hover:bg-gray-800",
+            };
+            return <button onClick={onClick} disabled={disabled} className={`${baseStyle} ${variants[variant]} ${className}`}>{children}</button>;
+        };
+
+        // --- Assembly Screen ---
+        const AssembleScreen = ({ currentParts, setPart, onBack }) => {
+            const [selectedSlot, setSelectedSlot] = useState('head');
+            const [hoveredPart, setHoveredPart] = useState(null);
+
+            // Calculate stats for current build
+            const calculateStats = (parts) => {
+                const totalWeight = Object.values(parts).reduce((sum, p) => sum + p.weight, 0);
+                const totalAP = (parts.head.ap||0) + parts.core.ap + parts.legs.ap;
+                const maxLoad = parts.legs.load;
+                const speed = Math.max(10, parts.legs.speed - Math.max(0, (totalWeight - maxLoad) / 3));
+                const totalAccuracy = parts.weapon.accuracy + (parts.arms.aim - 100);
+                return { totalWeight, maxLoad, totalAP, speed, totalAccuracy };
+            };
+
+            const currentStats = useMemo(() => calculateStats(currentParts), [currentParts]);
+            
+            // Calculate stats for preview (if we equipped the hovered part)
+            const previewStats = useMemo(() => {
+                if (!hoveredPart) return currentStats;
+                return calculateStats({ ...currentParts, [selectedSlot]: hoveredPart });
+            }, [currentParts, hoveredPart, selectedSlot, currentStats]);
+
+            const StatRow = ({ label, current, preview, isBadHigh = false }) => {
+                const diff = preview - current;
+                let color = 'text-gray-400';
+                if (diff > 0) color = isBadHigh ? 'text-red-400' : 'text-cyan-400';
+                if (diff < 0) color = isBadHigh ? 'text-cyan-400' : 'text-red-400';
+                
+                return (
+                    <div className="flex justify-between items-center py-1 border-b border-gray-800">
+                        <span className="text-xs text-gray-500">{label}</span>
+                        <div className="flex gap-2 font-mono">
+                            <span className="text-white">{current}</span>
+                            {hoveredPart && diff !== 0 && (
+                                <span className={`${color} text-xs`}>
+                                    {diff > 0 ? '▲' : '▼'} {Math.abs(diff)}
+                                </span>
+                            )}
+                        </div>
+                    </div>
+                );
+            };
+
+            return (
+                <div className="flex flex-col h-full p-4 bg-gray-950">
+                    <div className="flex justify-between items-center mb-4 border-b border-gray-800 pb-2">
+                        <h2 className="text-2xl tech-font text-cyan-500">ASSEMBLY</h2>
+                        <Button onClick={onBack} variant="secondary">BACK</Button>
+                    </div>
+
+                    <div className="flex flex-1 gap-4 overflow-hidden">
+                        {/* Slot Selection */}
+                        <div className="w-1/4 flex flex-col gap-2">
+                            {['head', 'core', 'arms', 'legs', 'weapon'].map(slot => (
+                                <button
+                                    key={slot}
+                                    onClick={() => setSelectedSlot(slot)}
+                                    className={`p-3 text-left border ${selectedSlot === slot ? 'border-cyan-500 bg-cyan-950/50' : 'border-gray-700 text-gray-600'}`}
+                                >
+                                    <div className="text-xs uppercase text-gray-500">{slot}</div>
+                                    <div className="font-bold text-sm truncate text-gray-300">{currentParts[slot].name}</div>
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* Part List */}
+                        <div className="w-1/2 overflow-y-auto pr-2 custom-scrollbar border border-gray-800 bg-black/50">
+                            <h3 className="text-xs tech-font text-cyan-600 p-2 bg-gray-900 sticky top-0">AVAILABLE PARTS</h3>
+                            {(selectedSlot === 'weapon' ? PARTS_DB.weapon : PARTS_DB[selectedSlot]).map(part => (
+                                <div 
+                                    key={part.id}
+                                    onClick={() => setPart(selectedSlot, part)}
+                                    onMouseEnter={() => setHoveredPart(part)}
+                                    onMouseLeave={() => setHoveredPart(null)}
+                                    className={`p-3 border-b border-gray-800 cursor-pointer hover:bg-gray-800 transition-colors ${currentParts[selectedSlot].id === part.id ? 'bg-cyan-900/20 border-l-4 border-l-cyan-500' : ''}`}
+                                >
+                                    <div className="flex justify-between">
+                                        <span className="font-bold text-sm text-gray-200">{part.name}</span>
+                                        <span className="text-xs text-gray-500">WT:{part.weight}</span>
+                                    </div>
+                                    <div className="text-xs text-gray-500 mt-1">{part.desc}</div>
+                                </div>
+                            ))}
+                        </div>
+
+                        {/* Stats Panel */}
+                        <div className="w-1/4 p-4 border border-gray-800 bg-black/80 flex flex-col gap-4">
+                            <div>
+                                <h3 className="text-sm tech-font text-cyan-500 mb-2">SPECIFICATION</h3>
+                                <StatRow label="TOTAL AP" current={currentStats.totalAP} preview={previewStats.totalAP} />
+                                <StatRow label="WEIGHT" current={currentStats.totalWeight} preview={previewStats.totalWeight} isBadHigh={true} />
+                                <StatRow label="MAX LOAD" current={currentStats.maxLoad} preview={previewStats.maxLoad} />
+                                <StatRow label="SPEED" current={Math.floor(currentStats.speed)} preview={Math.floor(previewStats.speed)} />
+                                <StatRow label="ACCURACY" current={Math.floor(currentStats.totalAccuracy)} preview={Math.floor(previewStats.totalAccuracy)} />
+                            </div>
+                            
+                            {currentStats.totalWeight > currentStats.maxLoad && (
+                                <div className="p-2 bg-red-900/50 border border-red-500 text-red-200 text-xs text-center animate-pulse">
+                                    WARNING: OVERWEIGHT<br/>SPEED PENALTY ACTIVE
+                                </div>
+                            )}
+
+                            <div className="mt-auto">
+                                <div className="text-xs text-gray-500 mb-1">SELECTED PART INFO</div>
+                                <div className="p-2 border border-gray-700 h-24 text-xs text-gray-300">
+                                    {hoveredPart ? (
+                                        <>
+                                            <div className="font-bold text-cyan-400 mb-1">{hoveredPart.name}</div>
+                                            {hoveredPart.desc}
+                                        </>
+                                    ) : (
+                                        <span className="text-gray-600">Hover over a part to see details.</span>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- Battle Screen ---
+        const BattleScreen = ({ playerParts, playerAi, enemyData, onFinish }) => {
+            const canvasRef = useRef(null);
+            const [logs, setLogs] = useState([]);
+            const [battleState, setBattleState] = useState(null);
+            const [viewMode, setViewMode] = useState('FPS'); 
+
+            // Initialize
+            useEffect(() => {
+                const initMech = (parts, ai, isPlayer, name, color) => {
+                    const totalWeight = Object.values(parts).reduce((sum, p) => sum + (p.weight||0), 0);
+                    const weightPenalty = Math.max(0, (totalWeight - parts.legs.load) / 2);
+                    const baseSpeed = parts.legs.speed - weightPenalty;
+                    const armAimBonus = parts.arms.aim || 100;
+                    
+                    return {
+                        isPlayer, name, color,
+                        maxHp: (parts.head.ap||0) + parts.core.ap + parts.legs.ap,
+                        hp: (parts.head.ap||0) + parts.core.ap + parts.legs.ap,
+                        en: parts.core.enOutput,
+                        maxEn: parts.core.enOutput,
+                        enRecovery: parts.core.enOutput / 15,
+                        speed: Math.max(2, baseSpeed / 8),
+                        evasionBase: parts.legs.evasion || 0,
+                        accuracyStat: parts.weapon.accuracy * (armAimBonus / 100),
+                        stabilityStat: parts.weapon.stability || 50,
+                        weapon: parts.weapon,
+                        parts: parts,
+                        ai: ai,
+                        x: isPlayer ? 200 : 600,
+                        y: 350,
+                        targetDist: (ai.range / 100) * 500 + 100,
+                        cooldown: 0,
+                        moveState: 0,
+                        recoil: 0, 
+                    };
+                };
+
+                setBattleState({
+                    player: initMech(playerParts, playerAi, true, 'PLAYER', '#00ffcc'),
+                    enemy: initMech(enemyData.parts, enemyData.ai, false, enemyData.name, enemyData.color),
+                    bullets: [],
+                    effects: [],
+                    frame: 0,
+                    finished: false,
+                    cameraShake: {x:0, y:0},
+                    damageFlash: 0
+                });
+                
+                setLogs(["SYSTEM: BATTLE INITIALIZED.", "SYSTEM: TARGET LOCKED."]);
+            }, []);
+
+            const addLog = (text) => {
+                setLogs(prev => [text, ...prev].slice(0, 50)); // Keep history
+            };
+
+            // Loop
+            useEffect(() => {
+                if (!battleState || battleState.finished) return;
+
+                const interval = setInterval(() => {
+                    setBattleState(prev => {
+                        if (prev.finished) return prev;
+                        const next = { ...prev, frame: prev.frame + 1 };
+                        next.bullets = [...prev.bullets];
+                        next.effects = [...prev.effects];
+                        next.cameraShake = {x: prev.cameraShake.x * 0.8, y: prev.cameraShake.y * 0.8}; 
+                        
+                        const p = next.player;
+                        const e = next.enemy;
+                        const dist = Math.abs(p.x - e.x);
+
+                        // Update Mechs
+                        const updateMech = (mech, target) => {
+                            if (mech.hp <= 0) return;
+                            mech.en = Math.min(mech.maxEn, mech.en + mech.enRecovery * 0.1);
+                            if (mech.cooldown > 0) mech.cooldown--;
+                            if (mech.recoil > 0) mech.recoil *= 0.8;
+
+                            // Move
+                            const rangeDiff = dist - mech.targetDist;
+                            const moveDir = rangeDiff > 50 ? 1 : (rangeDiff < -50 ? -1 : 0);
+                            let speed = mech.speed;
+                            if (mech.parts.legs.type === 'Tank') speed *= 0.8;
+                            if (mech.parts.legs.type === 'Reverse') speed *= 1.2;
+
+                            if (moveDir !== 0) {
+                                const direction = (target.x > mech.x) ? 1 : -1;
+                                mech.x += direction * moveDir * speed * 0.5;
+                            }
+                            mech.moveState += 0.1;
+                            mech.x = Math.max(50, Math.min(750, mech.x));
+                            if (mech.isPlayer && mech.x > e.x - 50) mech.x = e.x - 50;
+                            if (!mech.isPlayer && mech.x < p.x + 50) mech.x = p.x + 50;
+
+                            // Attack
+                            const w = mech.weapon;
+                            if (mech.cooldown <= 0 && mech.en >= (w.enUse||0) && dist <= w.range + 100) {
+                                if (Math.random() < (mech.ai.aggression/100) || Math.random() < 0.2) {
+                                    if(w.enUse) mech.en -= w.enUse;
+                                    mech.cooldown = w.reload;
+                                    mech.recoil = 20;
+                                    next.bullets.push({
+                                        owner: mech.isPlayer ? 'player' : 'enemy',
+                                        x: mech.x + (mech.isPlayer ? 20 : -20), y: mech.y - 40,
+                                        targetX: target.x, targetY: target.y - 40,
+                                        progress: 0, speed: w.speed / (dist/15),
+                                        damage: w.power, type: w.type,
+                                        accuracy: mech.accuracyStat, stability: mech.stabilityStat
+                                    });
+                                    if(mech.isPlayer && Math.random() < 0.3) addLog(`> ${mech.name} FIRING MAIN WEAPON`);
+                                }
+                            }
+                        };
+
+                        updateMech(p, e);
+                        updateMech(e, p);
+
+                        // Bullets
+                        next.bullets = next.bullets.filter(b => {
+                            b.progress += b.speed;
+                            if (b.progress >= 1) {
+                                const target = b.owner === 'player' ? e : p;
+                                const distPenalty = (dist/500)*10;
+                                let hitChance = (b.accuracy - distPenalty - target.evasionBase) + 30;
+                                
+                                if (Math.random()*100 > hitChance) {
+                                    next.effects.push({x: target.x + (Math.random()*60-30), y: target.y-60, text: "MISS", color: "#666", life: 20});
+                                    if(Math.random()<0.2) addLog(`> ${target.name} EVADED ATTACK`);
+                                    return false;
+                                } else {
+                                    const dmgVar = 0.5 + (b.stability||50)/200;
+                                    let dmg = Math.floor(b.damage * (dmgVar + Math.random()*(1-dmgVar)));
+                                    if (Math.random()<0.05) { dmg = Math.floor(dmg*1.5); addLog(`> CRITICAL HIT ON ${target.name}!`); }
+                                    target.hp -= dmg;
+                                    next.effects.push({x: target.x, y: target.y-40, text: `-${dmg}`, color: b.owner==='player'?'#00ffcc':'#ff3333', life: 30});
+                                    if(target.isPlayer) { next.cameraShake = {x: Math.random()*20-10, y: Math.random()*20-10}; next.damageFlash=5; }
+                                    return false;
+                                }
+                            }
+                            return true;
+                        });
+                        
+                        next.effects = next.effects.filter(e => e.life-- > 0);
+                        if(next.damageFlash>0) next.damageFlash--;
+
+                        if (p.hp <= 0 || e.hp <= 0) {
+                            next.finished = true;
+                            addLog(p.hp > 0 ? "MISSION ACCOMPLISHED." : "MISSION FAILED.");
+                            setTimeout(() => onFinish(p.hp > 0), 2000);
+                        }
+                        return next;
+                    });
+                }, 33);
+                return () => clearInterval(interval);
+            }, [battleState, onFinish]);
+
+            // --- Enhanced Wireframe Drawing ---
+            const drawWireframe = (ctx, mech, x, y, scale, isFront) => {
+                if (mech.hp <= 0) return;
+                ctx.save();
+                ctx.translate(x, y);
+                ctx.scale(scale, scale);
+                if (!isFront && !mech.isPlayer) ctx.scale(-1, 1); // Flip enemy in TPS
+
+                ctx.strokeStyle = mech.color;
+                ctx.lineWidth = 1.2;
+                ctx.fillStyle = '#050505';
+                
+                const box = (bx, by, w, h) => { ctx.beginPath(); ctx.rect(bx, by, w, h); ctx.fill(); ctx.stroke(); };
+                const poly = (pts) => {
+                    ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+                    for(let i=1; i<pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+                    ctx.closePath(); ctx.fill(); ctx.stroke();
+                };
+
+                // Detailed Drawing Logic
+                if (isFront) {
+                    // --- FRONT VIEW ---
+                    // Legs
+                    if (mech.parts.legs.type === 'Tank') {
+                        // Treads with wheels
+                        const drawTread = (tx) => {
+                            poly([[tx, 20], [tx+30, 20], [tx+40, 60], [tx-10, 60]]);
+                            // Wheels
+                            for(let i=0; i<3; i++) { ctx.beginPath(); ctx.arc(tx+15, 30+(i*12), 4, 0, Math.PI*2); ctx.stroke(); }
+                        };
+                        drawTread(-60); drawTread(30);
+                        box(-20, 30, 40, 20); // Center chassis
+                    } else {
+                        // Biped Legs
+                        poly([[-35, 20], [-15, 20], [-20, 50], [-30, 50]]); // L Thigh
+                        poly([[-30, 50], [-20, 50], [-15, 80], [-35, 80]]); // L Shin
+                        poly([[15, 20], [35, 20], [30, 50], [20, 50]]);    // R Thigh
+                        poly([[20, 50], [30, 50], [35, 80], [15, 80]]);    // R Shin
+                    }
+                    // Torso
+                    poly([[-25, 20], [25, 20], [35, -40], [-35, -40]]); // Main Core
+                    poly([[-15, -10], [15, -10], [20, -30], [-20, -30]]); // Chest Plate
+                    // Head
+                    poly([[-15, -40], [15, -40], [10, -60], [-10, -60]]);
+                    ctx.fillStyle = mech.color; ctx.fillRect(-8, -55, 16, 4); // Eye
+                    // Arms
+                    box(-55, -35, 20, 20); box(35, -35, 20, 20); // Shoulders
+                    box(-50, -15, 10, 40); box(40, -15, 10, 30); // Arms
+                    // Weapon (Gun held in R arm)
+                    ctx.fillStyle = '#000'; ctx.beginPath(); ctx.rect(45, 15, 10, 30); ctx.stroke();
+                } else {
+                    // --- SIDE VIEW ---
+                    // Legs
+                    if (mech.parts.legs.type === 'Tank') {
+                        poly([[-30, 10], [30, 10], [40, 40], [-40, 40]]); // Tread Side
+                        for(let i=0; i<3; i++) { ctx.beginPath(); ctx.arc(-20 + (i*20), 25, 8, 0, Math.PI*2); ctx.stroke(); }
+                    } else {
+                        // Reverse Joint
+                        if (mech.parts.legs.type === 'Reverse') {
+                            ctx.beginPath(); ctx.moveTo(0, 10); ctx.lineTo(-20, 25); ctx.lineTo(10, 50); ctx.lineTo(-10, 50); ctx.stroke();
+                        } else {
+                            // Biped
+                            box(-10, 10, 20, 20); box(-5, 30, 15, 20);
+                        }
+                    }
+                    // Torso
+                    poly([[-15, -30], [15, -30], [10, 10], [-20, 10]]);
+                    // Arm
+                    box(-5, -20, 15, 25);
+                    // Weapon
+                    ctx.beginPath(); ctx.moveTo(10, -5); ctx.lineTo(35, -5); ctx.lineWidth=3; ctx.stroke(); ctx.lineWidth=1.2;
+                    // Head
+                    box(-10, -45, 20, 15); ctx.fillRect(5, -42, 5, 5); // Eye side
+                }
+                ctx.restore();
+            };
+
+            const drawScene = (ctx) => {
+                if (!battleState) return;
+                const { player, enemy, bullets, effects, cameraShake, damageFlash } = battleState;
+                const dist = Math.abs(player.x - enemy.x);
+
+                ctx.save();
+                ctx.translate(cameraShake.x, cameraShake.y);
+                ctx.fillStyle = '#050505'; ctx.fillRect(0, 0, 800, 450); // Canvas area
+
+                if (viewMode === 'TPS') {
+                    // Grid
+                    ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    for(let i=0; i<=800; i+=50) { ctx.moveTo(i,0); ctx.lineTo(i,450); }
+                    ctx.stroke();
+                    // Draw Mechs
+                    drawWireframe(ctx, player, player.x, player.y, 1, false);
+                    drawWireframe(ctx, enemy, enemy.x, enemy.y, 1, false);
+                } else {
+                    // FPS
+                    const scale = 500 / (dist + 100);
+                    const horizonY = 250;
+                    ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    const offsetX = (player.x * 0.5) % 100;
+                    for(let i=-10; i<=20; i++) {
+                        const x = 400 + (i * 100) - offsetX;
+                        ctx.moveTo(x, horizonY); ctx.lineTo((x-400)*4 + 400, 600);
+                    }
+                    ctx.stroke();
+                    
+                    // Enemy Front
+                    const sway = Math.sin(enemy.moveState) * 20;
+                    drawWireframe(ctx, enemy, 400 + sway, 280, scale, true);
+
+                    // Player Weapon (HUD)
+                    ctx.save(); ctx.translate(600, 450 + player.recoil);
+                    ctx.fillStyle = '#111'; ctx.strokeStyle = '#00ffcc';
+                    ctx.beginPath(); ctx.moveTo(-20, 0); ctx.lineTo(-10, -150); ctx.lineTo(10, -150); ctx.lineTo(20, 0); ctx.fill(); ctx.stroke();
+                    ctx.restore();
+                }
+
+                // Bullets
+                bullets.forEach(b => {
+                    let bx, by;
+                    if (viewMode === 'TPS') {
+                        bx = b.x + (b.targetX - b.x) * b.progress;
+                        by = b.y + (b.targetY - b.y) * b.progress;
+                    } else {
+                        // Simple FPS bullet projection
+                        if (b.owner === 'player') {
+                            bx = 600 + (400 - 600) * b.progress;
+                            by = 450 + (280 - 450) * b.progress;
+                        } else {
+                            bx = 400 + (Math.random()*20-10);
+                            by = 280 + (400 - 280) * b.progress;
+                        }
+                    }
+                    ctx.fillStyle = b.owner === 'player' ? '#00ffcc' : '#ff3333';
+                    ctx.beginPath(); ctx.arc(bx, by, 3, 0, Math.PI*2); ctx.fill();
+                });
+
+                // Effects
+                effects.forEach(e => {
+                    ctx.font = `bold 14px "Share Tech Mono"`;
+                    ctx.fillStyle = e.color;
+                    // Adjust effect pos for FPS
+                    let ex = e.x, ey = e.y;
+                    if(viewMode === 'FPS' && (e.color==='#ff00ff' || e.color==='#00ffcc')) {
+                         const scale = 500 / (dist + 100);
+                         ex = 400; ey = 280 - (50*scale);
+                    }
+                    ctx.fillText(e.text, ex, ey);
+                });
+
+                if (damageFlash > 0) { ctx.fillStyle = `rgba(255, 0, 0, ${damageFlash * 0.1})`; ctx.fillRect(0, 0, 800, 450); }
+                ctx.restore();
+            };
+
+            useEffect(() => {
+                const ctx = canvasRef.current?.getContext('2d');
+                if (ctx) drawScene(ctx);
+            }, [battleState, viewMode]);
+
+            // --- Scroll to bottom of log ---
+            const logEndRef = useRef(null);
+            useEffect(() => {
+                logEndRef.current?.scrollIntoView({ behavior: "smooth" });
+            }, [logs]);
+
+            return (
+                <div className="w-full h-full bg-gray-900 flex flex-col relative">
+                    {/* View Toggle */}
+                    <div className="absolute top-4 right-4 z-10">
+                        <button onClick={() => setViewMode(prev => prev === 'FPS' ? 'TPS' : 'FPS')} className="bg-black/80 border border-cyan-500 text-cyan-400 px-3 py-1 tech-font text-xs hover:bg-cyan-900">
+                            VIEW: {viewMode} [V]
+                        </button>
+                    </div>
+
+                    {/* Main Canvas (Top) */}
+                    <div className="flex-1 bg-black relative border-b border-gray-700">
+                        <canvas ref={canvasRef} width={800} height={450} className="w-full h-full object-contain" />
+                        <div className="absolute inset-0 pointer-events-none scanline"></div>
+                    </div>
+
+                    {/* Console Log (Bottom) */}
+                    <div className="h-48 bg-black p-4 overflow-hidden flex flex-col border-t-2 border-cyan-900">
+                        <div className="text-cyan-600 text-xs tech-font mb-2 border-b border-gray-800">BATTLE LOG // SYSTEM OUTPUT</div>
+                        <div className="flex-1 overflow-y-auto log-scroll tech-font text-sm space-y-1">
+                            {logs.map((log, i) => (
+                                <div key={i} className="text-gray-300">
+                                    <span className="text-gray-600 mr-2">[{String(i).padStart(3, '0')}]</span>
+                                    {log}
+                                </div>
+                            ))}
+                            <div ref={logEndRef} />
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [view, setView] = useState('HOME');
+            const [currentParts, setCurrentParts] = useState({ head: PARTS_DB.head[0], core: PARTS_DB.core[0], arms: PARTS_DB.arms[0], legs: PARTS_DB.legs[0], weapon: PARTS_DB.weapon[0] });
+            const [aiSettings, setAiSettings] = useState({ range: 50, aggression: 50, evasion: 50 });
+            const [selectedRank, setSelectedRank] = useState(null);
+            const [lastResult, setLastResult] = useState(null);
+            const handleFinish = (win) => { setLastResult(win); setView('RESULT'); };
+
+            return (
+                <div className="w-screen h-screen flex flex-col text-gray-300 bg-gray-950">
+                    <header className="h-10 border-b border-gray-800 flex items-center px-4 justify-between bg-black">
+                        <h1 className="text-lg tech-font text-cyan-500 tracking-widest">RUST & CIRCUIT <span className="text-xs text-gray-600">v3.0</span></h1>
+                        <div className="text-xs text-gray-600">TERMINAL: ONLINE</div>
+                    </header>
+                    <main className="flex-1 overflow-hidden relative">
+                        {view === 'HOME' && (
+                            <div className="flex flex-col items-center justify-center h-full space-y-8 animate-in fade-in duration-700 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-gray-800 via-gray-950 to-black">
+                                <h1 className="text-6xl tech-font text-gray-800 absolute opacity-20 select-none">GARAGE</h1>
+                                <Button className="w-64 py-4" onClick={() => setView('ASSEMBLE')}>ASSEMBLY [機体構成]</Button>
+                                <Button className="w-64 py-4" onClick={() => setView('TACTICS')}>TACTICS [AI設定]</Button>
+                                <Button className="w-64 py-4" onClick={() => setView('RANK_SELECT')}>COLOSSEUM [出撃]</Button>
+                            </div>
+                        )}
+                        {view === 'ASSEMBLE' && <AssembleScreen currentParts={currentParts} setPart={(s, p) => setCurrentParts(prev => ({...prev, [s]: p}))} onBack={() => setView('HOME')} />}
+                        {view === 'TACTICS' && <TacticsScreen aiSettings={aiSettings} setAiSettings={setAiSettings} onBack={() => setView('HOME')} />}
+                        {view === 'RANK_SELECT' && (
+                            <div className="flex flex-col items-center justify-center h-full space-y-4">
+                                {RANKS.map(r => (
+                                    <button key={r.id} onClick={() => { setSelectedRank(r); setView('BATTLE'); }} className="w-80 p-4 border border-gray-800 hover:border-cyan-500 hover:bg-cyan-900/10 text-left transition-all">
+                                        <div className="text-xl tech-font text-cyan-400">{r.id}-RANK</div>
+                                        <div className="text-xs text-gray-500">REWARD: {r.prize} C</div>
+                                    </button>
+                                ))}
+                                <Button variant="secondary" onClick={() => setView('HOME')} className="mt-8">RETURN</Button>
+                            </div>
+                        )}
+                        {view === 'BATTLE' && selectedRank && <BattleScreen playerParts={currentParts} playerAi={aiSettings} enemyData={ENEMIES[selectedRank.enemyId]} onFinish={handleFinish} />}
+                        {view === 'RESULT' && (
+                            <div className="absolute inset-0 z-50 bg-black/90 flex flex-col items-center justify-center">
+                                <h2 className={`text-4xl tech-font mb-4 ${lastResult ? 'text-cyan-400' : 'text-red-500'}`}>{lastResult ? 'MISSION COMPLETE' : 'MISSION FAILED'}</h2>
+                                <p className="text-gray-400 mb-8">{lastResult ? `報酬 ${selectedRank.prize} C 獲得` : '機体大破'}</p>
+                                <Button onClick={() => setView('HOME')}>RETURN</Button>
+                            </div>
+                        )}
+                    </main>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
